@@ -2,7 +2,7 @@ import gym
 import torch
 import torch.nn as nn 
 import torch.optim as optim
-import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 
 import numpy as np
 import math
@@ -26,12 +26,14 @@ env = gym.make('CartPole-v1')
 # if gpu is to be used
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+writer = SummaryWriter('runs/experiment1')
+
 # Define a class for replay buffer
 class ExperienceRelay:
 
     def __init__(self, replay_buffer_cap, minibatch_size):
         
-        self.Transition = namedtuple('Transition', 'current_phi action reward next_phi done') # Define transitions
+        self.Transition = namedtuple('Transition', 'curr_st action reward next_st done') # Define transitions
         self.minibatch_size = minibatch_size
         self.buffer = deque([], maxlen=replay_buffer_cap)
 
@@ -40,29 +42,102 @@ class ExperienceRelay:
 
     def sample_minibatch(self):
         return random.sample(self.buffer, self.minibatch_size)
+    
+    def get_length(self):
+        return len(self.buffer)
 
 class Agent:
 
     def __init__(self, HYPERPARAMS):
         self.HYPERPARAMS = HYPERPARAMS
-        self.model = DiscreteSAC(self.HYPERPARAMS)
+        self.model = DiscreteSAC(HYPERPARAMS)
+
+        self.n_states = env.observation_space.shape[0]
+        self.n_actions = env.action_space.n
+
+        self.replay_buffer = ExperienceRelay(self.HYPERPARAMS['replay_buffer_cap'], self.HYPERPARAMS['minibatch_size'])
+
+        self.q_net_optimizer = optim.Adam(self.model.q_net_params)
+        self.pi_optimizer = optim.Adam(self.model.policy.parameters())
+        self.loss_fn = nn.SmoothL1Loss()
 
     def select_action(self, curr_st):
 
         if self.HYPERPARAMS['action_space'] == 'discrete':
             
             with torch.no_grad():
-                action_probs = self.model.current_policy(curr_st)
-        
-        else:
+                action_probs = self.model.policy(curr_st)
 
+            if np.random.random() > self.HYPERPARAMS['epsilon']:
+                action = action_probs.max().item()
+            else:
+                action = torch.random(action_probs).item()
 
+    def optimize_model(self, minibatch, j):
 
-    def update_current_nets(self, ):
+        # reasoning behind TD3 DDQN clipping and overestimation bias?
+        # reasoning behind number of policies
+        # WHy replay buffer can't be used in PG algos.
 
-    def update_target_nets(self, ):
+        # creating minibatch
+        transition_minibatch = self.replay_buffer.Transition(*zip(*minibatch))
+        curr_st_mb = torch.stack(transition_minibatch.curr_st).to(device)
+        action_mb = torch.stack(transition_minibatch.action)
+        reward_mb = torch.stack(transition_minibatch.reward)
+
+        # Getting q values for all actions in current states
+        curr_st_mb_q1vals = self.model.curr_Q1(curr_st_mb)
+        curr_st_mb_q2vals = self.model.curr_Q2(curr_st_mb)
+
+        #Getting q value for current state, action
+        curr_st_action_q1vals = curr_st_mb_q1vals.gather(1, action_mb)
+        curr_st_action_q2vals = curr_st_mb_q2vals.gather(1, action_mb)
+
+        non_terminal_idxs = torch.tensor(transition_minibatch, dtype=torch.bool)
+        non_terminal_next_st_mb = torch.stack([ns for ns in transition_minibatch.next_st if ns is not None]).to(device)
+
+        with torch.no_grad():
+            # sample next state max action using current q nets
+            next_st_max_action_q1net = self.model.curr_Q1(non_terminal_next_st_mb).max(1)[1].detach() 
+            next_st_max_action_q2net = self.model.curr_Q2(non_terminal_next_st_mb).max(1)[1].detach()
+
+            # evaluate sampled max action on target q nets
+            next_st_eval_max_action_q1net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
+            next_st_eval_max_action_q2net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
+
+            next_st_eval_max_action_q1net[non_terminal_idxs] = self.model.target_Q2(non_terminal_next_st_mb).gather(1, next_st_max_action_q1net).detach()
+            next_st_eval_max_action_q2net[non_terminal_idxs] = self.model.target_Q1(non_terminal_next_st_mb).gather(1, next_st_max_action_q2net).detach()
+
+            # Target Q values
+            backup = reward_mb + self.HYPERPARAMS['gamma'] * (torch.minimum(next_st_eval_max_action_q1net, next_st_eval_max_action_q2net) - self.alpha * log_pi_action)
+
+        # Optimizing Q nets
+        q_net_loss = self.loss_fn(y, curr_st_action_q1vals) + self.loss_fn(y, curr_st_action_q2vals)
+        self.q_net_optimizer.zero_grad()
+        q_net_loss.backward()
+        self.q_net_optimizer.step()
+
+        if j % self.HYPERPARAMS['pi_tgt_nets_update_freq']:
+            # Optimizing policy
+            with torch.no_grad():
+                curr_st_mb_q_vals = torch.minimum(curr_st_mb_q1vals.clone().detach(), curr_st_mb_q2vals.clone().detach())
+
+            pi_loss = self.alpha * torch.log(self.model.policy(curr_st_mb)) - curr_st_mb_q_vals
+            self.pi_optimizer.zero_grad()
+            pi_loss.backward()
+            self.pi_optimizer.step()
+
+    def update_target_nets(self):
+
+        with torch.no_grad():
+            updated_params = self.HYPERPARAMS['polyak'] * self.model.target_Q1.state_dict() + (1-self.HYPERPARAMS['polyak']) * self.model.curr_Q1.state_dict()
+            self.model.target_Q1.load_state_dict(updated_params)
+
+            updated_params = self.HYPERPARAMS['polyak'] * self.model.target_Q2.state_dict() + (1-self.HYPERPARAMS['polyak']) * self.model.curr_Q2.state_dict()
+            self.model.target_Q2.load_state_dict(updated_params)
     
     def train(self):
+        agent_lifetime_steps = 0
 
         for ep in range(self.HYPERPARAMS['n_episodes']):
 
@@ -75,17 +150,20 @@ class Agent:
 
                 next_st, reward, done, _ = env.step(action)
                 self.replay_buffer.store(curr_st, action, reward, next_st, done)
+                env_steps += 1
+                agent_lifetime_steps += 1
 
                 if not done:
                     curr_st = next_st
                     action = self.select_action(curr_st)
-
-                 # determine some condition for update
-                if done:
+                
+                # optimize model
+                if self.replay_buffer.get_length() > self.HYPERPARAMS['init_buffer_len'] or agent_lifetime_steps % self.HYPERPARAMS['steps_update_freq'] == 0:
                     for j in range(self.HYPERPARAMS['n_model_updates']):
                         minibatch = self.replay_buffer.sample_minibatch()
-                        self.update_current_nets(minibatch)
-                        self.update_target_nets()
+                        self.optimize_model(minibatch, j)
+                        if j % self.HYPERPARAMS['pi_tgt_nets_update_freq']:
+                            self.update_target_nets()
 
         env.close()
 
