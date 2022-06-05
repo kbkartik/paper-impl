@@ -1,15 +1,11 @@
-constants:
-  image_dim: !!python/tuple (4, 84, 84)
-  replay_buffer_cap: 10000
-  minibatch_size: 32
-  n_episodes: 1000
-  eps_start: 0.95
-  eps_end: 0.05
-  eps_delay: 500
-  history_length: 4
-  skip_frames: 4
-  target_update_freq: 10
-  gamma: 0.99
-
 hyperparams:
-  
+  replay_buffer_cap: 100000
+  init_buffer_len: 1000
+  minibatch_size: 256
+  n_episodes: 1000
+  gamma: 0.99
+  action_space: 'discrete'
+  polyak: 0.005
+  steps_update_freq: 10000
+  n_model_updates: 10
+  pi_tgt_nets_update_freq: 5

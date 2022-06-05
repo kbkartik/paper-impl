@@ -50,16 +50,18 @@ class Agent:
 
     def __init__(self, HYPERPARAMS):
         self.HYPERPARAMS = HYPERPARAMS
-        self.model = DiscreteSAC(HYPERPARAMS)
 
         self.n_states = env.observation_space.shape[0]
         self.n_actions = env.action_space.n
+        self.model = DiscreteSAC(n_states, n_actions)        
 
         self.replay_buffer = ExperienceRelay(self.HYPERPARAMS['replay_buffer_cap'], self.HYPERPARAMS['minibatch_size'])
 
-        self.q_net_optimizer = optim.Adam(self.model.q_net_params)
-        self.pi_optimizer = optim.Adam(self.model.policy.parameters())
+        self.q_net_optimizer = optim.Adam(self.model.q_net_params, lr=0.0001)
+        self.pi_optimizer = optim.Adam(self.model.policy.parameters(), lr=0.0001)
         self.loss_fn = nn.SmoothL1Loss()
+
+        self.alpha = 0.3
 
     def select_action(self, curr_st):
 
@@ -112,7 +114,7 @@ class Agent:
             backup = reward_mb + self.HYPERPARAMS['gamma'] * (torch.minimum(next_st_eval_max_action_q1net, next_st_eval_max_action_q2net) - self.alpha * log_pi_action)
 
         # Optimizing Q nets
-        q_net_loss = self.loss_fn(y, curr_st_action_q1vals) + self.loss_fn(y, curr_st_action_q2vals)
+        q_net_loss = self.loss_fn(y, curr_st_action_q1vals) + self.loss_fn(backup, curr_st_action_q2vals)
         self.q_net_optimizer.zero_grad()
         q_net_loss.backward()
         self.q_net_optimizer.step()
@@ -145,13 +147,15 @@ class Agent:
             curr_st = env.reset()
             action = self.select_action(curr_st)
             env_steps = 0
+            episodic_return = 0
             
-            while not done and env_steps < self.HYPERPARAMS['max_env_steps']:
+            while not done: # and env_steps < self.HYPERPARAMS['max_env_steps']:
 
                 next_st, reward, done, _ = env.step(action)
                 self.replay_buffer.store(curr_st, action, reward, next_st, done)
                 env_steps += 1
                 agent_lifetime_steps += 1
+                episodic_return += reward
 
                 if not done:
                     curr_st = next_st
@@ -164,6 +168,8 @@ class Agent:
                         self.optimize_model(minibatch, j)
                         if j % self.HYPERPARAMS['pi_tgt_nets_update_freq']:
                             self.update_target_nets()
+            
+            writer.add_scalar('episodic_return', episodic_return, ep+1)
 
         env.close()
 
@@ -173,4 +179,3 @@ if __name__ == "__main__":
         hyper_params = yaml.load(f)
         agent = Agent(hyper_params)
         agent.train()
-        agent.eval()
