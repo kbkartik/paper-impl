@@ -25,16 +25,33 @@ class DiscreteSAC(nn.Module):
         self.target_Q2.network.eval()
 
         # Define policy
-        self.policy = MLPNet(obs_dim, n_actions, output_activation='gumbel')
+        self.policy = PolicyNet(obs_dim, n_actions)
 
         self.q_net_params = itertools.chain(self.curr_Q1.parameters(), self.curr_Q2.network.parameters())
 
 class MLPNet(nn.Module):
 
-    def __init__(self, obs_dim, n_actions, output_activation='softmax'):
+    def __init__(self, obs_dim, n_actions):
         super(MLPNet, self).__init__()
 
-        self.output_activation = output_activation
+        self.network = nn.Sequential(
+            nn.Linear(obs_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, n_actions),
+            nn.Softmax(dim=1)
+        ).to(device)
+    
+    def forward(self, x):
+
+        x = x.to(device)
+        x = self.network(x)
+        return x
+
+class PolicyNet(nn.Module):
+
+    def __init__(self, obs_dim, n_actions):
+        super(MLPNet, self).__init__()
+
         self.network = nn.Sequential(
             nn.Linear(obs_dim, 256),
             nn.ReLU(),

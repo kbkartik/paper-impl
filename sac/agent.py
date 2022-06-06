@@ -33,7 +33,7 @@ class ExperienceRelay:
 
     def __init__(self, replay_buffer_cap, minibatch_size):
         
-        self.Transition = namedtuple('Transition', 'curr_st action reward next_st done') # Define transitions
+        self.Transition = namedtuple('Transition', 'curr_st action reward next_st') # Define transitions
         self.minibatch_size = minibatch_size
         self.buffer = deque([], maxlen=replay_buffer_cap)
 
@@ -91,24 +91,30 @@ class Agent:
         curr_st_mb_q1vals = self.model.curr_Q1(curr_st_mb)
         curr_st_mb_q2vals = self.model.curr_Q2(curr_st_mb)
 
-        #Getting q value for current state, action
+        # Getting q value for current state, action
         curr_st_action_q1vals = curr_st_mb_q1vals.gather(1, action_mb)
         curr_st_action_q2vals = curr_st_mb_q2vals.gather(1, action_mb)
 
-        non_terminal_idxs = torch.tensor(transition_minibatch, dtype=torch.bool)
-        non_terminal_next_st_mb = torch.stack([ns for ns in transition_minibatch.next_st if ns is not None]).to(device)
+        non_terminal_idxs = []
+        non_terminal_next_st_mb = []
+        for i, ns in enumerate(transition_minibatch.next_st):
+            if ns is not None:
+                non_terminal_idxs.append(i)
+                non_terminal_next_st_mb.append(ns)
+        
+        non_terminal_idxs = torch.tensor(non_terminal_idxs, dtype=torch.bool)
+        non_terminal_next_st_mb = torch.stack(non_terminal_next_st_mb).to(device)
 
         with torch.no_grad():
             # sample next state max action using current q nets
-            next_st_max_action_q1net = self.model.curr_Q1(non_terminal_next_st_mb).max(1)[1].detach() 
-            next_st_max_action_q2net = self.model.curr_Q2(non_terminal_next_st_mb).max(1)[1].detach()
+            next_st_action_mb = self.model.policy(non_terminal_next_st_mb).detach()
 
             # evaluate sampled max action on target q nets
-            next_st_eval_max_action_q1net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
-            next_st_eval_max_action_q2net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
+            next_st_action_tgt_eval_q1net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
+            next_st_action_tgt_eval_q2net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
 
-            next_st_eval_max_action_q1net[non_terminal_idxs] = self.model.target_Q2(non_terminal_next_st_mb).gather(1, next_st_max_action_q1net).detach()
-            next_st_eval_max_action_q2net[non_terminal_idxs] = self.model.target_Q1(non_terminal_next_st_mb).gather(1, next_st_max_action_q2net).detach()
+            next_st_action_tgt_eval_q1net[non_terminal_idxs] = self.model.target_Q1(non_terminal_next_st_mb).gather(1, next_st_action_mb).detach()
+            next_st_action_tgt_eval_q2net[non_terminal_idxs] = self.model.target_Q2(non_terminal_next_st_mb).gather(1, next_st_action_mb).detach()
 
             # Target Q values
             backup = reward_mb + self.HYPERPARAMS['gamma'] * (torch.minimum(next_st_eval_max_action_q1net, next_st_eval_max_action_q2net) - self.alpha * log_pi_action)
@@ -152,7 +158,7 @@ class Agent:
             while not done: # and env_steps < self.HYPERPARAMS['max_env_steps']:
 
                 next_st, reward, done, _ = env.step(action)
-                self.replay_buffer.store(curr_st, action, reward, next_st, done)
+                self.replay_buffer.store(curr_st, action, reward, next_st)
                 env_steps += 1
                 agent_lifetime_steps += 1
                 episodic_return += reward
