@@ -9,3 +9,17 @@ hyperparams:
   steps_update_freq: 10000
   n_model_updates: 10
   pi_tgt_nets_update_freq: 5
+
+# There has been two approaches for discrete SAC: https://www.cs.utexas.edu/~yukez/cs391r_reports/files/Fall-2020/LK.pdf
+# Couple of reddit posts mention that discrete sac doesn't do well on simple tasks but works well on Atari envs.
+# This is something we need to check for our implementation. Check this post as well: https://www.reddit.com/r/reinforcementlearning/comments/l5eq78/reinforcement_learning_soft_actorcritic_for/
+
+# There are some proposals to use PPO. Not sure how that works. Let's see.
+
+# The whole point of reparametrizing is to reduce variance compared to Likelihood ratio PG.
+# https://gregorygundersen.com/blog/2018/04/29/reparameterization/
+# https://stackoverflow.com/questions/70163823/how-does-a-gradient-backpropagates-through-random-samples
+# 
+# Following two sums up VI:
+# https://mpatacchiola.github.io/blog/2021/01/25/intro-variational-inference.html
+# https://mpatacchiola.github.io/blog/2021/02/08/intro-variational-inference-2.html
