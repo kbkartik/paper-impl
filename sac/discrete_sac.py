@@ -38,7 +38,7 @@ class MLPNet(nn.Module):
             nn.Linear(obs_dim, 256),
             nn.ReLU(),
             nn.Linear(256, n_actions),
-            nn.Softmax(dim=1)
+            nn.ReLU()
         ).to(device)
     
     def forward(self, x):
@@ -57,13 +57,28 @@ class PolicyNet(nn.Module):
             nn.ReLU(),
             nn.Linear(256, n_actions),
         ).to(device)
+
+    def get_logpi_and_one_hot(self, logits, soft_categorical, dim):
+        """
+        Get the sampled action through straight through estimator trick for the 
+        sampled gumbel softmax. Also, return the log pi for entropy term in 
+        Qnet and policy net losses.
+        """
+
+        index = soft_categorical.max(dim, keepdim=True)[1]
+        y_hard = torch.zeros_like(logits, memory_format=torch.legacy_contiguous_format).scatter_(dim, index, 1.0)
+        one_hot_action_vec = y_hard - soft_categorical.detach() + soft_categorical
+        logpi_action = torch.log(torch.multiply(soft_categorical.detach(), one_hot_action_vec.detach()).sum(dim))
+        
+        return logpi_action, one_hot_action_vec
     
     def forward(self, x):
-
+        
         x = x.to(device)
         x = self.network(x)
-        if self.output_activation == 'gumbel':
-            x = F.gumbel_softmax(x, hard=True, dim=1)
-        else:
-            x = F.softmax(x, dim=1)
-        return x
+        soft_categorical = F.gumbel_softmax(x, dim=1)
+
+        dim = 1 if soft_categorical.shape[0] > 1 else -1
+        logpi_action, one_hot_action_vec = self.get_logpi_and_one_hot(x, soft_categorical, dim)
+
+        return logpi_action, one_hot_action_vec

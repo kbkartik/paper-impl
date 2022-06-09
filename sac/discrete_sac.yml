@@ -20,6 +20,21 @@ hyperparams:
 # https://gregorygundersen.com/blog/2018/04/29/reparameterization/
 # https://stackoverflow.com/questions/70163823/how-does-a-gradient-backpropagates-through-random-samples
 # 
-# Following two sums up VI:
+# Following four sums up VI:
 # https://mpatacchiola.github.io/blog/2021/01/25/intro-variational-inference.html
 # https://mpatacchiola.github.io/blog/2021/02/08/intro-variational-inference-2.html
+# https://gist.github.com/yzh119/fd2146d2aeb329d067568a493b20172f
+# https://ai.stackexchange.com/questions/33824/how-does-backprop-work-through-the-random-sampling-layer-in-a-variational-autoen
+
+hyperparams = {
+  'replay_buffer_cap': 100000,
+  'init_buffer_len': 1000,
+  'minibatch_size': 256,
+  'n_episodes': 10,
+  'gamma': 0.99,
+  'action_space': 'discrete',
+  'polyak': 0.005,
+  'steps_update_freq': 10000,
+  'n_model_updates': 10,
+  'pi_tgt_nets_update_freq': 5
+}

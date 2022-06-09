@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from collections import namedtuple, deque
 import yaml
 
-from discrete_sac import DiscreteSAC
+#from discrete_sac import DiscreteSAC
 
 # Define seeding
 seed = 10
@@ -51,9 +51,9 @@ class Agent:
     def __init__(self, HYPERPARAMS):
         self.HYPERPARAMS = HYPERPARAMS
 
-        self.n_states = env.observation_space.shape[0]
+        n_states = env.observation_space.shape[0]
         self.n_actions = env.action_space.n
-        self.model = DiscreteSAC(n_states, n_actions)        
+        self.model = DiscreteSAC(n_states, self.n_actions)        
 
         self.replay_buffer = ExperienceRelay(self.HYPERPARAMS['replay_buffer_cap'], self.HYPERPARAMS['minibatch_size'])
 
@@ -68,12 +68,14 @@ class Agent:
         if self.HYPERPARAMS['action_space'] == 'discrete':
             
             with torch.no_grad():
-                action_probs = self.model.policy(curr_st)
+                logpi_action, one_hot_action_vec = self.model.policy(curr_st)
 
-            if np.random.random() > self.HYPERPARAMS['epsilon']:
-                action = action_probs.max().item()
+            if curr_st.shape[0] == 1:
+                action = one_hot_action_vec.nonzero().item()
             else:
-                action = torch.random(action_probs).item()
+                action = one_hot_action_vec.nonzero()[:, 1]
+            
+            return action, logpi_action
 
     def optimize_model(self, minibatch, j):
 
@@ -107,20 +109,20 @@ class Agent:
 
         with torch.no_grad():
             # sample next state max action using current q nets
-            next_st_action_mb = self.model.policy(non_terminal_next_st_mb).detach()
+            next_action_mb, logpi_next_action_mb = self.model.policy(non_terminal_next_st_mb).detach()
 
             # evaluate sampled max action on target q nets
-            next_st_action_tgt_eval_q1net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
-            next_st_action_tgt_eval_q2net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
+            next_st_action_tgt_q1net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
+            next_st_action_tgt_q2net = torch.zeros(self.replaybuffer.minibatch_size, device=device)
 
-            next_st_action_tgt_eval_q1net[non_terminal_idxs] = self.model.target_Q1(non_terminal_next_st_mb).gather(1, next_st_action_mb).detach()
-            next_st_action_tgt_eval_q2net[non_terminal_idxs] = self.model.target_Q2(non_terminal_next_st_mb).gather(1, next_st_action_mb).detach()
+            next_st_action_tgt_q1net[non_terminal_idxs] = self.model.target_Q1(non_terminal_next_st_mb).gather(1, next_action_mb).detach()
+            next_st_action_tgt_q2net[non_terminal_idxs] = self.model.target_Q2(non_terminal_next_st_mb).gather(1, next_action_mb).detach()
 
             # Target Q values
-            backup = reward_mb + self.HYPERPARAMS['gamma'] * (torch.minimum(next_st_eval_max_action_q1net, next_st_eval_max_action_q2net) - self.alpha * log_pi_action)
+            backup = reward_mb + self.HYPERPARAMS['gamma'] * (torch.minimum(next_st_action_tgt_q1net, next_st_action_tgt_q2net) - self.alpha * logpi_next_action_mb)
 
         # Optimizing Q nets
-        q_net_loss = self.loss_fn(y, curr_st_action_q1vals) + self.loss_fn(backup, curr_st_action_q2vals)
+        q_net_loss = self.loss_fn(backup, curr_st_action_q1vals) + self.loss_fn(backup, curr_st_action_q2vals)
         self.q_net_optimizer.zero_grad()
         q_net_loss.backward()
         self.q_net_optimizer.step()
@@ -130,7 +132,8 @@ class Agent:
             with torch.no_grad():
                 curr_st_mb_q_vals = torch.minimum(curr_st_mb_q1vals.clone().detach(), curr_st_mb_q2vals.clone().detach())
 
-            pi_loss = self.alpha * torch.log(self.model.policy(curr_st_mb)) - curr_st_mb_q_vals
+            _, logpi_curr_action_mb = self.model.policy(curr_st_mb)
+            pi_loss = self.alpha * logpi_curr_action_mb - curr_st_mb_q_vals
             self.pi_optimizer.zero_grad()
             pi_loss.backward()
             self.pi_optimizer.step()
@@ -151,7 +154,7 @@ class Agent:
 
             done = False
             curr_st = env.reset()
-            action = self.select_action(curr_st)
+            action, _ = self.select_action(torch.as_tensor(curr_st).unsqueeze(0))
             env_steps = 0
             episodic_return = 0
             
@@ -165,7 +168,7 @@ class Agent:
 
                 if not done:
                     curr_st = next_st
-                    action = self.select_action(curr_st)
+                    action, _ = self.select_action(torch.as_tensor(curr_st).unsqueeze(0))
                 
                 # optimize model
                 if self.replay_buffer.get_length() > self.HYPERPARAMS['init_buffer_len'] or agent_lifetime_steps % self.HYPERPARAMS['steps_update_freq'] == 0:
@@ -179,9 +182,5 @@ class Agent:
 
         env.close()
 
-
-if __name__ == "__main__":
-    with open('./discrete_sac.yml') as f:
-        hyper_params = yaml.load(f)
-        agent = Agent(hyper_params)
-        agent.train()
+agent = Agent(hyperparams)
+agent.train()
